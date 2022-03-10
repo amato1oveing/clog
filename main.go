@@ -2,20 +2,18 @@ package main
 
 import (
 	"Logger/log"
-	"sync"
 	"time"
 )
 
 func main() {
 	aaa := log.NewLogger("debug")
-	wg := sync.WaitGroup{}
-	wg.Add(1)
+	defer aaa.Close()
+
 	for {
-		aaa.INFO("1%s1%d1", "aaa", 555)
-		aaa.DEBUG("2%s2%d2", "bbb", 666)
-		aaa.WARN("3%s3%d3", "ccc", 777)
-		aaa.ERROR("4%s4%d4", "ddd", 888)
+		aaa.DEBUG("这是一个%s的%d日志", "DEBUG", 111)
+		aaa.INFO("这是一个%s的%d日志", "INFO", 222)
+		aaa.WARN("这是一个%s的%d日志", "WARN", 333)
+		aaa.ERROR("这是一个%s的%d日志", "ERROR", 444)
 		time.Sleep(5 * time.Second)
 	}
-	wg.Wait()
 }

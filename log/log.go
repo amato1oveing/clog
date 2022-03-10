@@ -55,25 +55,35 @@ func NewLogger(level string) *Logger {
 		LogLever: parse(level),
 		MsgCh:    make(chan MsgWithColor, 10000),
 	}
-	go log.Run()
+	go log.run()
 	return log
 }
 
-func (this Logger) Run() {
+func (this Logger) run() {
 	InitFile()
 	for i := 0; i < 10; i++ {
 		go func() {
-			for {
-				select {
-				case MsgWithColor := <-this.MsgCh:
-					fmt.Fprintln(logFile, MsgWithColor.msg)
-					fmt.Println(fmt.Sprintf("%s%s%s", MsgWithColor.color, MsgWithColor.msg, COLOR_END))
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("log panic:", r)
 				}
+			}()
+			for MsgWithColor := range this.MsgCh {
+				fmt.Fprintln(logFile, MsgWithColor.msg)
+				fmt.Println(fmt.Sprintf("%s%s%s", MsgWithColor.color, MsgWithColor.msg, COLOR_END))
 			}
 		}()
 	}
 }
 
+func (this Logger) Close() {
+	t := time.Tick(10 * time.Millisecond)
+	<-t
+	close(this.MsgCh)
+	logFile.Close()
+}
+
+//解析日志等级
 func parse(str string) LEVEL {
 	switch strings.ToLower(str) {
 	case "debug":
@@ -89,6 +99,7 @@ func parse(str string) LEVEL {
 	}
 }
 
+//判断日志等级
 func (this Logger) checkLevel(level LEVEL) bool {
 	if this.LogLever <= level {
 		return false
