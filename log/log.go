@@ -10,21 +10,8 @@ import (
 	"time"
 )
 
-var logFile *os.File
-
-func InitFile() {
-	if logFile != nil {
-		return
-	}
-	var err error
-	logFile, err = os.OpenFile("./zc.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		fmt.Println("open log file failed, err:", err)
-		return
-	}
-}
-
 type LEVEL int //日志等级
+
 const (
 	DEBUG LEVEL = iota
 	INFO
@@ -39,6 +26,20 @@ const (
 	COLOR_RED    = "\033[0;31m" // 红 ERROR
 	COLOR_END    = "\033[0m"
 )
+
+var logFile *os.File
+
+func InitFile() {
+	if logFile != nil {
+		return
+	}
+	var err error
+	logFile, err = os.OpenFile("./zc.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Println("open log file failed, err:", err)
+		return
+	}
+}
 
 type Logger struct {
 	LogLever LEVEL
