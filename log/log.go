@@ -12,15 +12,16 @@ import (
 
 var logFile *os.File
 
-func init() {
-	fmt.Println("init log serve...")
+func InitFile() {
+	if logFile != nil {
+		return
+	}
 	var err error
 	logFile, err = os.OpenFile("./zc.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		fmt.Println("open log file failed, err:", err)
 		return
 	}
-	fmt.Println("init log success!")
 }
 
 type LEVEL int //日志等级
@@ -31,20 +32,46 @@ const (
 	ERROR
 )
 
-type COLOR int //日志颜色
 const (
-	COLOR_WHITE  = COLOR(37) // 白
-	COLOR_GREEN  = COLOR(32) // 绿
-	COLOR_YELLOW = COLOR(33) // 黄
-	COLOR_RED    = COLOR(31) // 红
+	COLOR_GREEN  = "\033[0;32m" // 绿 DEBUG
+	COLOR_WHITE  = "\033[0;37m" // 白 INFO
+	COLOR_YELLOW = "\033[0;33m" // 黄 WARN
+	COLOR_RED    = "\033[0;31m" // 红 ERROR
+	COLOR_END    = "\033[0m"
 )
 
 type Logger struct {
 	LogLever LEVEL
+	MsgCh    chan MsgWithColor
 }
 
-func NewLogger(level string) Logger {
-	return Logger{LogLever: parse(level)}
+type MsgWithColor struct {
+	msg   string
+	color string
+}
+
+func NewLogger(level string) *Logger {
+	log := &Logger{
+		LogLever: parse(level),
+		MsgCh:    make(chan MsgWithColor, 10000),
+	}
+	go log.Run()
+	return log
+}
+
+func (this Logger) Run() {
+	InitFile()
+	for i := 0; i < 10; i++ {
+		go func() {
+			for {
+				select {
+				case MsgWithColor := <-this.MsgCh:
+					fmt.Fprintln(logFile, MsgWithColor.msg)
+					fmt.Println(fmt.Sprintf("%s%s%s", MsgWithColor.color, MsgWithColor.msg, COLOR_END))
+				}
+			}
+		}()
+	}
 }
 
 func parse(str string) LEVEL {
@@ -58,7 +85,7 @@ func parse(str string) LEVEL {
 	case "error":
 		return ERROR
 	default:
-		return DEBUG 	//默认日志等级为DEBUG
+		return DEBUG //默认日志等级为DEBUG
 	}
 }
 
@@ -69,66 +96,39 @@ func (this Logger) checkLevel(level LEVEL) bool {
 	return true
 }
 
-func (this Logger) DEBUG(msg string, args ...interface{}) {
-	if this.checkLevel(DEBUG) {
+func (this Logger) writeMsg(flag string, color string, msg string, args ...interface{}) {
+	if this.checkLevel(parse(flag)) {
 		return
 	}
-	for _, arg := range args {
-		msg = strings.Replace(msg, "%s", inter2str(arg), 1)
-	}
-	msg = strings.Replace(msg, "%s", "%%s", -1)
+	msg = fmt.Sprintf(msg, args...)
 
-	pc,file,line,ok:=runtime.Caller(1)
-	if !ok{
+	pc, file, line, ok := runtime.Caller(2)
+	if !ok {
 		return
 	}
-	funcName:=runtime.FuncForPC(pc).Name()
-	msg = fmt.Sprintf("[DEBUG] <%s> %s:%d:%s %s", time.Now().Format("2006-01-02-15 04:05"),file,line,funcName, msg)
-	//logFile.WriteString(str)
-	fmt.Fprintln(logFile, msg)
-	fmt.Println(msg)
+	funcName := runtime.FuncForPC(pc).Name()
+	msg = fmt.Sprintf("[%s] <%s> %s:%d:%s %s", flag, time.Now().Format("2006-01-02 15:04:05"), file, line, funcName, msg)
+
+	this.MsgCh <- MsgWithColor{
+		msg:   msg,
+		color: color,
+	}
+}
+
+func (this Logger) DEBUG(msg string, args ...interface{}) {
+	this.writeMsg("DEBUG", COLOR_GREEN, msg, args...)
 }
 
 func (this Logger) INFO(msg string, args ...interface{}) {
-	if this.checkLevel(INFO) {
-		return
-	}
-	for _, arg := range args {
-		msg = strings.Replace(msg, "%s", inter2str(arg), 1)
-	}
-	msg = strings.Replace(msg, "%s", "%%s", -1)
-	msg = fmt.Sprintf("[INFO] <%s> %s", time.Now().Format("2006-01-02-15 04:05"), msg)
-	//logFile.WriteString(msg)
-	fmt.Fprintln(logFile, msg)
-	fmt.Println(msg)
+	this.writeMsg("INFO", COLOR_WHITE, msg, args...)
 }
 
 func (this Logger) WARN(msg string, args ...interface{}) {
-	if this.checkLevel(WARN) {
-		return
-	}
-	for _, arg := range args {
-		msg = strings.Replace(msg, "%s", inter2str(arg), 1)
-	}
-	msg = strings.Replace(msg, "%s", "%%s", -1)
-	msg = fmt.Sprintf("[WARN] <%s> %s", time.Now().Format("2006-01-02-15 04:05"), msg)
-	//logFile.WriteString(str)
-	fmt.Fprintln(logFile, msg)
-	fmt.Println(msg)
+	this.writeMsg("WARN", COLOR_YELLOW, msg, args...)
 }
 
 func (this Logger) ERROR(msg string, args ...interface{}) {
-	if this.checkLevel(ERROR) {
-		return
-	}
-	for _, arg := range args {
-		msg = strings.Replace(msg, "%s", inter2str(arg), 1)
-	}
-	msg = strings.Replace(msg, "%s", "%%s", -1)
-	msg = fmt.Sprintf("[ERROR] <%s> %s", time.Now().Format("2006-01-02-15 04:05"), msg)
-	//logFile.WriteString(str)
-	fmt.Fprintln(logFile, msg)
-	fmt.Println(msg)
+	this.writeMsg("ERROR", COLOR_RED, msg, args...)
 }
 
 //将interface转为string
