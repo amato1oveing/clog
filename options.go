@@ -21,8 +21,8 @@ const (
 	flagDevelopment       = "log.development"
 	flagName              = "log.name"
 
-	consoleFormat = "console"
-	jsonFormat    = "json"
+	ConsoleFormat = "console"
+	JsonFormat    = "json"
 )
 
 // Options contains configuration items related to log.
@@ -44,7 +44,7 @@ func NewOptions() *Options {
 		Level:             zapcore.InfoLevel.String(),
 		DisableCaller:     false,
 		DisableStacktrace: false,
-		Format:            consoleFormat,
+		Format:            ConsoleFormat,
 		EnableColor:       false,
 		Development:       false,
 		OutputPaths:       []string{"stdout"},
@@ -62,7 +62,7 @@ func (o *Options) Validate() []error {
 	}
 
 	format := strings.ToLower(o.Format)
-	if format != consoleFormat && format != jsonFormat {
+	if format != ConsoleFormat && format != JsonFormat {
 		errs = append(errs, fmt.Errorf("not a valid log format: %q", o.Format))
 	}
 
@@ -102,7 +102,7 @@ func (o *Options) Build() error {
 		zapLevel = zapcore.InfoLevel
 	}
 	encodeLevel := zapcore.CapitalLevelEncoder
-	if o.Format == consoleFormat && o.EnableColor {
+	if o.Format == ConsoleFormat && o.EnableColor {
 		encodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
