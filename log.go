@@ -204,7 +204,7 @@ func New(opts *Options) *zapLogger {
 	}
 	encodeLevel := zapcore.CapitalLevelEncoder
 	// when output to local path, with color is forbidden
-	if opts.Format == consoleFormat && opts.EnableColor {
+	if opts.Format == ConsoleFormat && opts.EnableColor {
 		encodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
