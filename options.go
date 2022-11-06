@@ -97,7 +97,7 @@ func (o *Options) Build() error {
 		encoder = zapcore.NewJSONEncoder(encoderConfig)
 	}
 	newCore := zapcore.NewCore(encoder, writeSyncer, o.Level)
-	logger := zap.New(newCore, zap.AddCaller(), zap.AddStacktrace(zapcore.PanicLevel))
+	logger := zap.New(newCore, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.PanicLevel))
 
 	zap.RedirectStdLog(logger.Named(o.Name))
 	zap.ReplaceGlobals(logger)

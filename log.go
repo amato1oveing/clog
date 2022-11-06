@@ -203,7 +203,7 @@ func New(opts *Options) *zapLogger {
 		encoder = zapcore.NewJSONEncoder(encoderConfig)
 	}
 	newCore := zapcore.NewCore(encoder, writeSyncer, opts.Level)
-	l := zap.New(newCore, zap.AddCaller(), zap.AddStacktrace(zapcore.PanicLevel))
+	l := zap.New(newCore, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.PanicLevel))
 
 	logger := &zapLogger{
 		zapLogger: l.Named(opts.Name),
