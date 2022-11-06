@@ -3,90 +3,56 @@ package clog
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/natefinch/lumberjack"
 	"strings"
+	"time"
 
-	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-const (
-	flagLevel             = "log.level"
-	flagDisableCaller     = "log.disable-caller"
-	flagDisableStacktrace = "log.disable-stacktrace"
-	flagFormat            = "log.format"
-	flagEnableColor       = "log.enable-color"
-	flagOutputPaths       = "log.output-paths"
-	flagErrorOutputPaths  = "log.error-output-paths"
-	flagDevelopment       = "log.development"
-	flagName              = "log.name"
+type Format string
 
-	ConsoleFormat = "console"
-	JsonFormat    = "json"
+const (
+	ConsoleFormat Format = "console"
+	JsonFormat    Format = "json"
 )
 
-// Options contains configuration items related to log.
+// Options 包含与日志相关的配置项
 type Options struct {
-	OutputPaths       []string `json:"output-paths"       mapstructure:"output-paths"`
-	ErrorOutputPaths  []string `json:"error-output-paths" mapstructure:"error-output-paths"`
-	Level             string   `json:"level"              mapstructure:"level"`
-	Format            string   `json:"format"             mapstructure:"format"`
-	DisableCaller     bool     `json:"disable-caller"     mapstructure:"disable-caller"`
-	DisableStacktrace bool     `json:"disable-stacktrace" mapstructure:"disable-stacktrace"`
-	EnableColor       bool     `json:"enable-color"       mapstructure:"enable-color"`
-	Development       bool     `json:"development"        mapstructure:"development"`
-	Name              string   `json:"name"               mapstructure:"name"`
+	OutputPath  string `json:"output-path"`
+	Level       Level  `json:"level"`
+	Format      Format `json:"format"`
+	EnableColor bool   `json:"enable-color"`
+	Name        string `json:"name"`
 }
 
-// NewOptions creates an Options object with default parameters.
+// NewOptions 创建一个带有默认参数的Options对象
 func NewOptions() *Options {
 	return &Options{
-		Level:             zapcore.InfoLevel.String(),
-		DisableCaller:     false,
-		DisableStacktrace: false,
-		Format:            ConsoleFormat,
-		EnableColor:       false,
-		Development:       false,
-		OutputPaths:       []string{"stdout"},
-		ErrorOutputPaths:  []string{"stderr"},
+		Level:       InfoLevel,
+		Format:      ConsoleFormat,
+		EnableColor: false,
+		OutputPath:  ".",
+		Name:        "clog",
 	}
 }
 
-// Validate validate the options fields.
+// Validate 验证选项字段
 func (o *Options) Validate() []error {
 	var errs []error
 
-	var zapLevel zapcore.Level
-	if err := zapLevel.UnmarshalText([]byte(o.Level)); err != nil {
-		errs = append(errs, err)
-	}
-
-	format := strings.ToLower(o.Format)
-	if format != ConsoleFormat && format != JsonFormat {
+	if o.Format != ConsoleFormat && o.Format != JsonFormat {
 		errs = append(errs, fmt.Errorf("not a valid log format: %q", o.Format))
+	}
+	if o.OutputPath == "" {
+		errs = append(errs, fmt.Errorf("not a valid log outputPath: %s", o.OutputPath))
+	}
+	if o.Name == "" {
+		errs = append(errs, fmt.Errorf("not a valid log name: %s", o.Name))
 	}
 
 	return errs
-}
-
-// AddFlags adds flags for log to the specified FlagSet object.
-func (o *Options) AddFlags(fs *pflag.FlagSet) {
-	fs.StringVar(&o.Level, flagLevel, o.Level, "Minimum log output `LEVEL`.")
-	fs.BoolVar(&o.DisableCaller, flagDisableCaller, o.DisableCaller, "Disable output of caller information in the log.")
-	fs.BoolVar(&o.DisableStacktrace, flagDisableStacktrace,
-		o.DisableStacktrace, "Disable the log to record a stack trace for all messages at or above panic level.")
-	fs.StringVar(&o.Format, flagFormat, o.Format, "Log output `FORMAT`, support plain or json format.")
-	fs.BoolVar(&o.EnableColor, flagEnableColor, o.EnableColor, "Enable output ansi colors in plain format logs.")
-	fs.StringSliceVar(&o.OutputPaths, flagOutputPaths, o.OutputPaths, "Output paths of log.")
-	fs.StringSliceVar(&o.ErrorOutputPaths, flagErrorOutputPaths, o.ErrorOutputPaths, "Error output paths of log.")
-	fs.BoolVar(
-		&o.Development,
-		flagDevelopment,
-		o.Development,
-		"Development puts the logger in development mode, which changes "+
-			"the behavior of DPanicLevel and takes stacktraces more liberally.",
-	)
-	fs.StringVar(&o.Name, flagName, o.Name, "The name of the logger.")
 }
 
 func (o *Options) String() string {
@@ -95,48 +61,49 @@ func (o *Options) String() string {
 	return string(data)
 }
 
-// Build constructs a global zap logger from the Config and Options.
+// Build 从配置和选项中构造一个全局的zap记录器
 func (o *Options) Build() error {
-	var zapLevel zapcore.Level
-	if err := zapLevel.UnmarshalText([]byte(o.Level)); err != nil {
-		zapLevel = zapcore.InfoLevel
-	}
 	encodeLevel := zapcore.CapitalLevelEncoder
 	if o.Format == ConsoleFormat && o.EnableColor {
 		encodeLevel = zapcore.CapitalColorLevelEncoder
 	}
+	if o.Name != "" {
+		strings.Trim(o.Name, "/")
+	}
 
-	zc := &zap.Config{
-		Level:             zap.NewAtomicLevelAt(zapLevel),
-		Development:       o.Development,
-		DisableCaller:     o.DisableCaller,
-		DisableStacktrace: o.DisableStacktrace,
-		Sampling: &zap.SamplingConfig{
-			Initial:    100,
-			Thereafter: 100,
-		},
-		Encoding: o.Format,
-		EncoderConfig: zapcore.EncoderConfig{
-			MessageKey:     "message",
-			LevelKey:       "level",
-			TimeKey:        "timestamp",
-			NameKey:        "logger",
-			CallerKey:      "caller",
-			StacktraceKey:  "stacktrace",
-			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    encodeLevel,
-			EncodeTime:     timeEncoder,
-			EncodeDuration: milliSecondsDurationEncoder,
-			EncodeCaller:   zapcore.ShortCallerEncoder,
-			EncodeName:     zapcore.FullNameEncoder,
-		},
-		OutputPaths:      o.OutputPaths,
-		ErrorOutputPaths: o.ErrorOutputPaths,
+	lumberJackLogger := &lumberjack.Logger{
+		Filename:   o.OutputPath + "/" + o.Name + "-" + time.Now().Format(TimeFormat) + ".log",
+		MaxSize:    1000,
+		MaxBackups: 5,
+		MaxAge:     30,
+		Compress:   false,
+		LocalTime:  true,
 	}
-	logger, err := zc.Build(zap.AddStacktrace(zapcore.PanicLevel))
-	if err != nil {
-		return err
+	writeSyncer := zapcore.AddSync(lumberJackLogger)
+
+	encoderConfig := zapcore.EncoderConfig{
+		MessageKey:     "message",
+		LevelKey:       "level",
+		TimeKey:        "timestamp",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    encodeLevel,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: milliSecondsDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+		EncodeName:     zapcore.FullNameEncoder,
 	}
+	var encoder zapcore.Encoder
+	if o.Format == ConsoleFormat {
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	} else if o.Format == JsonFormat {
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	}
+	newCore := zapcore.NewCore(encoder, writeSyncer, o.Level)
+	logger := zap.New(newCore, zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.PanicLevel))
+
 	zap.RedirectStdLog(logger.Named(o.Name))
 	zap.ReplaceGlobals(logger)
 

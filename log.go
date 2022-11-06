@@ -4,37 +4,35 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/natefinch/lumberjack"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	"github.com/amato1oveing/clog/klog"
 )
 
-// InfoLogger represents the ability to log non-error messages, at a particular verbosity.
+// InfoLogger 是一个只能打印Info信息的Logger接口
 type InfoLogger interface {
-	// Info logs a non-error message with the given key/value pairs as context.
-	//
-	// The msg argument should be used to add some constant description to
-	// the log line.  The key/value pairs can then be used to add additional
-	// variable information.  The key/value pairs should alternate string
-	// keys and arbitrary values.
 	Info(msg string, fields ...Field)
 	Infof(format string, v ...interface{})
 	Infow(msg string, keysAndValues ...interface{})
 
-	// Enabled tests whether this InfoLogger is enabled.  For example,
-	// commandline flags might be used to set the logging verbosity and disable
-	// some info logs.
+	// Enabled 测试InfoLogger是否已启用
 	Enabled() bool
 }
 
-// Logger represents the ability to log messages, both errors and not.
+// noopInfoLogger 是一个InfoLogger实现，但是什么也不做
+type noopInfoLogger struct{}
+
+func (l *noopInfoLogger) Enabled() bool                    { return false }
+func (l *noopInfoLogger) Info(_ string, _ ...Field)        {}
+func (l *noopInfoLogger) Infof(_ string, _ ...interface{}) {}
+func (l *noopInfoLogger) Infow(_ string, _ ...interface{}) {}
+
+// Logger 一个可以打印各种类型信息的接口
 type Logger interface {
-	// All Loggers implement InfoLogger.  Calling InfoLogger methods directly on
-	// a Logger value is equivalent to calling them on a V(0) InfoLogger.  For
-	// example, logger.Info() produces the same result as logger.V(0).Info.
 	InfoLogger
 	Debug(msg string, fields ...Field)
 	Debugf(format string, v ...interface{})
@@ -52,57 +50,29 @@ type Logger interface {
 	Fatalf(format string, v ...interface{})
 	Fatalw(msg string, keysAndValues ...interface{})
 
-	// V returns an InfoLogger value for a specific verbosity level.  A higher
-	// verbosity level means a log message is less important.  It's illegal to
-	// pass a log level less than zero.
-	V(level Level) InfoLogger
-	Write(p []byte) (n int, err error)
-
-	// WithValues adds some key-value pairs of context to a logger.
-	// See Info for documentation on how key/value pairs work.
+	// WithValues 添加一些上下文键值对
 	WithValues(keysAndValues ...interface{}) Logger
 
-	// WithName adds a new element to the logger's name.
-	// Successive calls with WithName continue to append
-	// suffixes to the logger's name.  It's strongly recommended
-	// that name segments contain only letters, digits, and hyphens
-	// (see the package documentation for more information).
+	// WithName 为日志记录器的名称添加一个新元素
+	// 连续的WithName调用继续追加在后缀
+	// 名称段只包含字母、数字和连字符
 	WithName(name string) Logger
 
-	// WithContext returns a copy of context in which the log value is set.
-	WithContext(ctx context.Context) context.Context
-
-	// Flush calls the underlying Core's Sync method, flushing any buffered
-	// log entries. Applications should take care to call Sync before exiting.
+	// Flush 调用底层核心的Sync方法，刷新所有缓冲
+	// 应用程序在退出前应注意调用Sync
 	Flush()
 }
 
 var _ Logger = &zapLogger{}
 
-// noopInfoLogger is a logr.InfoLogger that's always disabled, and does nothing.
-type noopInfoLogger struct{}
-
-func (l *noopInfoLogger) Enabled() bool                    { return false }
-func (l *noopInfoLogger) Info(_ string, _ ...Field)        {}
-func (l *noopInfoLogger) Infof(_ string, _ ...interface{}) {}
-func (l *noopInfoLogger) Infow(_ string, _ ...interface{}) {}
-
-var disabledInfoLogger = &noopInfoLogger{}
-
-// NB: right now, we always use the equivalent of sugared logging.
-// This is necessary, since logr doesn't define non-suggared types,
-// and using zap-specific non-suggared types would make uses tied
-// directly to Zap.
-
-// infoLogger is a logr.InfoLogger that uses Zap to log at a particular
-// level.  The level has already been converted to a Zap level, which
-// is to say that `logrLevel = -1*zapLevel`.
+// infoLogger是一个InfoLogger实现，由Zap实现
 type infoLogger struct {
 	level zapcore.Level
 	log   *zap.Logger
 }
 
 func (l *infoLogger) Enabled() bool { return true }
+
 func (l *infoLogger) Info(msg string, fields ...Field) {
 	if checkedEntry := l.log.Check(l.level, msg); checkedEntry != nil {
 		checkedEntry.Write(fields...)
@@ -121,17 +91,13 @@ func (l *infoLogger) Infow(msg string, keysAndValues ...interface{}) {
 	}
 }
 
-// zapLogger is a logr.Logger that uses Zap to log.
+// zapLogger是一个Logger实现
 type zapLogger struct {
-	// NB: this looks very similar to zap.SugaredLogger, but
-	// deals with our desire to have multiple verbosity levels.
 	zapLogger *zap.Logger
 	infoLogger
 }
 
-// handleFields converts a bunch of arbitrary key-value pairs into Zap fields.  It takes
-// additional pre-converted Zap fields, for use with automatically attached fields, like
-// `error`.
+//handleFields 将一些key/value形式的错误信息转化为zap中的Field格式
 func handleFields(l *zap.Logger, args []interface{}, additional ...zap.Field) []zap.Field {
 	// a slightly modified version of zap.SugaredLogger.sweetenFields
 	if len(args) == 0 {
@@ -183,30 +149,46 @@ func handleFields(l *zap.Logger, args []interface{}, additional ...zap.Field) []
 var (
 	std = New(NewOptions())
 	mu  sync.Mutex
+
+	ContextKeysMap = map[string]struct{}{
+		KeyRequestID:   {},
+		KeyUsername:    {},
+		KeyUserId:      {},
+		KeyWatcherName: {},
+		KeyTraceId:     {},
+	}
 )
 
-// Init initializes logger with specified options.
+// Init 使用Options初始化std
 func Init(opts *Options) {
 	mu.Lock()
 	defer mu.Unlock()
 	std = New(opts)
 }
 
-// New create logger by opts which can custmoized by command arguments.
+// New 通过Options创建Logger
 func New(opts *Options) *zapLogger {
 	if opts == nil {
 		opts = NewOptions()
 	}
 
-	var zapLevel zapcore.Level
-	if err := zapLevel.UnmarshalText([]byte(opts.Level)); err != nil {
-		zapLevel = zapcore.InfoLevel
-	}
 	encodeLevel := zapcore.CapitalLevelEncoder
-	// when output to local path, with color is forbidden
 	if opts.Format == ConsoleFormat && opts.EnableColor {
 		encodeLevel = zapcore.CapitalColorLevelEncoder
 	}
+	if opts.Name != "" {
+		strings.Trim(opts.Name, "/")
+	}
+
+	lumberJackLogger := &lumberjack.Logger{
+		Filename:   opts.OutputPath + "/" + opts.Name + "-" + time.Now().Format(TimeFormat) + ".log",
+		MaxSize:    1000,
+		MaxBackups: 5,
+		MaxAge:     30,
+		Compress:   false,
+		LocalTime:  true,
+	}
+	writeSyncer := zapcore.AddSync(lumberJackLogger)
 
 	encoderConfig := zapcore.EncoderConfig{
 		MessageKey:     "message",
@@ -217,31 +199,20 @@ func New(opts *Options) *zapLogger {
 		StacktraceKey:  "stacktrace",
 		LineEnding:     zapcore.DefaultLineEnding,
 		EncodeLevel:    encodeLevel,
-		EncodeTime:     timeEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
 		EncodeDuration: milliSecondsDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
+		EncodeName:     zapcore.FullNameEncoder,
 	}
+	var encoder zapcore.Encoder
+	if opts.Format == ConsoleFormat {
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	} else if opts.Format == JsonFormat {
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	}
+	newCore := zapcore.NewCore(encoder, writeSyncer, opts.Level)
+	l := zap.New(newCore, zap.AddCallerSkip(1), zap.AddStacktrace(zapcore.PanicLevel))
 
-	loggerConfig := &zap.Config{
-		Level:             zap.NewAtomicLevelAt(zapLevel),
-		Development:       opts.Development,
-		DisableCaller:     opts.DisableCaller,
-		DisableStacktrace: opts.DisableStacktrace,
-		Sampling: &zap.SamplingConfig{
-			Initial:    100,
-			Thereafter: 100,
-		},
-		Encoding:         opts.Format,
-		EncoderConfig:    encoderConfig,
-		OutputPaths:      opts.OutputPaths,
-		ErrorOutputPaths: opts.ErrorOutputPaths,
-	}
-
-	var err error
-	l, err := loggerConfig.Build(zap.AddStacktrace(zapcore.PanicLevel), zap.AddCallerSkip(1))
-	if err != nil {
-		panic(err)
-	}
 	logger := &zapLogger{
 		zapLogger: l.Named(opts.Name),
 		infoLogger: infoLogger{
@@ -249,19 +220,16 @@ func New(opts *Options) *zapLogger {
 			level: zap.InfoLevel,
 		},
 	}
-	klog.InitLogger(l)
 	zap.RedirectStdLog(l)
+	zap.ReplaceGlobals(l)
 
 	return logger
 }
 
-// SugaredLogger returns global sugared logger.
-func SugaredLogger() *zap.SugaredLogger {
-	return std.zapLogger.Sugar()
-}
+// SugaredLogger 返回全局的SugaredLogger
+func SugaredLogger() *zap.SugaredLogger { return std.zapLogger.Sugar() }
 
-// StdErrLogger returns logger of standard library which writes to supplied zap
-// logger at error level.
+// StdErrLogger 返回标准库Logger，错误级别为error
 func StdErrLogger() *log.Logger {
 	if std == nil {
 		return nil
@@ -273,8 +241,7 @@ func StdErrLogger() *log.Logger {
 	return nil
 }
 
-// StdInfoLogger returns logger of standard library which writes to supplied zap
-// logger at info level.
+// StdInfoLogger 返回标准库Logger，错误级别为info
 func StdInfoLogger() *log.Logger {
 	if std == nil {
 		return nil
@@ -286,54 +253,41 @@ func StdInfoLogger() *log.Logger {
 	return nil
 }
 
-// V return a leveled InfoLogger.
-func V(level Level) InfoLogger { return std.V(level) }
-
-func (l *zapLogger) V(level Level) InfoLogger {
-	if l.zapLogger.Core().Enabled(level) {
-		return &infoLogger{
-			level: level,
-			log:   l.zapLogger,
-		}
-	}
-
-	return disabledInfoLogger
-}
-
-func (l *zapLogger) Write(p []byte) (n int, err error) {
-	l.zapLogger.Info(string(p))
-
-	return len(p), nil
-}
-
-// WithValues creates a child logger and adds adds Zap fields to it.
+// WithValues 创建一个子Logger，并将字段添加到其中
 func WithValues(keysAndValues ...interface{}) Logger { return std.WithValues(keysAndValues...) }
 
+//WithValues 创建一个子Logger，并将字段添加到其中
 func (l *zapLogger) WithValues(keysAndValues ...interface{}) Logger {
 	newLogger := l.zapLogger.With(handleFields(l.zapLogger, keysAndValues)...)
 
 	return NewLogger(newLogger)
 }
 
-// WithName adds a new path segment to the logger's name. Segments are joined by
-// periods. By default, Loggers are unnamed.
+// WithName 为日志记录器的名称添加一个新元素
+// 连续的WithName调用继续追加在后缀
+// 名称段只包含字母、数字和连字符
 func WithName(s string) Logger { return std.WithName(s) }
 
+// WithName 为日志记录器的名称添加一个新元素
+// 连续的WithName调用继续追加在后缀
+// 名称段只包含字母、数字和连字符
 func (l *zapLogger) WithName(name string) Logger {
 	newLogger := l.zapLogger.Named(name)
 
 	return NewLogger(newLogger)
 }
 
-// Flush calls the underlying Core's Sync method, flushing any buffered
-// log entries. Applications should take care to call Sync before exiting.
+// Flush 调用底层核心的Sync方法，刷新所有缓冲
+// 应用程序在退出前应注意调用Sync
 func Flush() { std.Flush() }
 
+// Flush 调用底层核心的Sync方法，刷新所有缓冲
+// 应用程序在退出前应注意调用Sync
 func (l *zapLogger) Flush() {
 	_ = l.zapLogger.Sync()
 }
 
-// NewLogger creates a new logr.Logger using the given Zap Logger to log.
+// NewLogger 创建一个新的Logger
 func NewLogger(l *zap.Logger) Logger {
 	return &zapLogger{
 		zapLogger: l,
@@ -344,26 +298,12 @@ func NewLogger(l *zap.Logger) Logger {
 	}
 }
 
-// ZapLogger used for other log wrapper such as klog.
+// ZapLogger 返回ZapLogger
 func ZapLogger() *zap.Logger {
 	return std.zapLogger
 }
 
-// CheckIntLevel used for other log wrapper such as klog which return if logging a
-// message at the specified level is enabled.
-func CheckIntLevel(level int32) bool {
-	var lvl zapcore.Level
-	if level < 5 {
-		lvl = zapcore.InfoLevel
-	} else {
-		lvl = zapcore.DebugLevel
-	}
-	checkEntry := std.zapLogger.Check(lvl, "")
-
-	return checkEntry != nil
-}
-
-// Debug method output debug level log.
+// Debug 输出Debug等级日志
 func Debug(msg string, fields ...Field) {
 	std.zapLogger.Debug(msg, fields...)
 }
@@ -372,7 +312,7 @@ func (l *zapLogger) Debug(msg string, fields ...Field) {
 	l.zapLogger.Debug(msg, fields...)
 }
 
-// Debugf method output debug level log.
+// Debugf 输出Debug等级日志，使用fmt.Sprintf格式化
 func Debugf(format string, v ...interface{}) {
 	std.zapLogger.Sugar().Debugf(format, v...)
 }
@@ -381,7 +321,7 @@ func (l *zapLogger) Debugf(format string, v ...interface{}) {
 	l.zapLogger.Sugar().Debugf(format, v...)
 }
 
-// Debugw method output debug level log.
+// Debugw 输出Debug等级日志，并携带key/value形式的值
 func Debugw(msg string, keysAndValues ...interface{}) {
 	std.zapLogger.Sugar().Debugw(msg, keysAndValues...)
 }
@@ -390,7 +330,7 @@ func (l *zapLogger) Debugw(msg string, keysAndValues ...interface{}) {
 	l.zapLogger.Sugar().Debugw(msg, keysAndValues...)
 }
 
-// Info method output info level log.
+// Info 输出Info等级日志
 func Info(msg string, fields ...Field) {
 	std.zapLogger.Info(msg, fields...)
 }
@@ -399,7 +339,7 @@ func (l *zapLogger) Info(msg string, fields ...Field) {
 	l.zapLogger.Info(msg, fields...)
 }
 
-// Infof method output info level log.
+// Infof 输出Info等级日志，使用fmt.Sprintf格式化
 func Infof(format string, v ...interface{}) {
 	std.zapLogger.Sugar().Infof(format, v...)
 }
@@ -408,7 +348,7 @@ func (l *zapLogger) Infof(format string, v ...interface{}) {
 	l.zapLogger.Sugar().Infof(format, v...)
 }
 
-// Infow method output info level log.
+// Infow 输出Info等级日志，并携带key/value形式的值
 func Infow(msg string, keysAndValues ...interface{}) {
 	std.zapLogger.Sugar().Infow(msg, keysAndValues...)
 }
@@ -417,7 +357,7 @@ func (l *zapLogger) Infow(msg string, keysAndValues ...interface{}) {
 	l.zapLogger.Sugar().Infow(msg, keysAndValues...)
 }
 
-// Warn method output warning level log.
+// Warn 输出Warn等级日志
 func Warn(msg string, fields ...Field) {
 	std.zapLogger.Warn(msg, fields...)
 }
@@ -426,7 +366,7 @@ func (l *zapLogger) Warn(msg string, fields ...Field) {
 	l.zapLogger.Warn(msg, fields...)
 }
 
-// Warnf method output warning level log.
+// Warnf 输出Debug等级日志，使用fmt.Sprintf格式化
 func Warnf(format string, v ...interface{}) {
 	std.zapLogger.Sugar().Warnf(format, v...)
 }
@@ -435,7 +375,7 @@ func (l *zapLogger) Warnf(format string, v ...interface{}) {
 	l.zapLogger.Sugar().Warnf(format, v...)
 }
 
-// Warnw method output warning level log.
+// Warnw 输出Warn等级日志，并携带key/value形式的值
 func Warnw(msg string, keysAndValues ...interface{}) {
 	std.zapLogger.Sugar().Warnw(msg, keysAndValues...)
 }
@@ -444,7 +384,7 @@ func (l *zapLogger) Warnw(msg string, keysAndValues ...interface{}) {
 	l.zapLogger.Sugar().Warnw(msg, keysAndValues...)
 }
 
-// Error method output error level log.
+// Error 输出Error等级日志
 func Error(msg string, fields ...Field) {
 	std.zapLogger.Error(msg, fields...)
 }
@@ -453,7 +393,7 @@ func (l *zapLogger) Error(msg string, fields ...Field) {
 	l.zapLogger.Error(msg, fields...)
 }
 
-// Errorf method output error level log.
+// Errorf 输出Error等级日志，使用fmt.Sprintf格式化
 func Errorf(format string, v ...interface{}) {
 	std.zapLogger.Sugar().Errorf(format, v...)
 }
@@ -462,7 +402,7 @@ func (l *zapLogger) Errorf(format string, v ...interface{}) {
 	l.zapLogger.Sugar().Errorf(format, v...)
 }
 
-// Errorw method output error level log.
+// Errorw 输出Error等级日志，并携带key/value形式的值
 func Errorw(msg string, keysAndValues ...interface{}) {
 	std.zapLogger.Sugar().Errorw(msg, keysAndValues...)
 }
@@ -471,7 +411,7 @@ func (l *zapLogger) Errorw(msg string, keysAndValues ...interface{}) {
 	l.zapLogger.Sugar().Errorw(msg, keysAndValues...)
 }
 
-// Panic method output panic level log and shutdown application.
+// Panic 输出Panic等级日志
 func Panic(msg string, fields ...Field) {
 	std.zapLogger.Panic(msg, fields...)
 }
@@ -480,7 +420,7 @@ func (l *zapLogger) Panic(msg string, fields ...Field) {
 	l.zapLogger.Panic(msg, fields...)
 }
 
-// Panicf method output panic level log and shutdown application.
+// Panicf 输出Error等级日志，使用fmt.Sprintf格式化
 func Panicf(format string, v ...interface{}) {
 	std.zapLogger.Sugar().Panicf(format, v...)
 }
@@ -489,7 +429,7 @@ func (l *zapLogger) Panicf(format string, v ...interface{}) {
 	l.zapLogger.Sugar().Panicf(format, v...)
 }
 
-// Panicw method output panic level log.
+// Panicw 输出Panic等级日志，并携带key/value形式的值
 func Panicw(msg string, keysAndValues ...interface{}) {
 	std.zapLogger.Sugar().Panicw(msg, keysAndValues...)
 }
@@ -498,7 +438,7 @@ func (l *zapLogger) Panicw(msg string, keysAndValues ...interface{}) {
 	l.zapLogger.Sugar().Panicw(msg, keysAndValues...)
 }
 
-// Fatal method output fatal level log.
+// Fatal 输出Fatal等级日志
 func Fatal(msg string, fields ...Field) {
 	std.zapLogger.Fatal(msg, fields...)
 }
@@ -507,7 +447,7 @@ func (l *zapLogger) Fatal(msg string, fields ...Field) {
 	l.zapLogger.Fatal(msg, fields...)
 }
 
-// Fatalf method output fatal level log.
+// Fatalf 输出Fatal等级日志，使用fmt.Sprintf格式化
 func Fatalf(format string, v ...interface{}) {
 	std.zapLogger.Sugar().Fatalf(format, v...)
 }
@@ -516,7 +456,7 @@ func (l *zapLogger) Fatalf(format string, v ...interface{}) {
 	l.zapLogger.Sugar().Fatalf(format, v...)
 }
 
-// Fatalw method output Fatalw level log.
+// Fatalw 输出Fatal等级日志，并携带key/value形式的值
 func Fatalw(msg string, keysAndValues ...interface{}) {
 	std.zapLogger.Sugar().Fatalw(msg, keysAndValues...)
 }
@@ -525,30 +465,40 @@ func (l *zapLogger) Fatalw(msg string, keysAndValues ...interface{}) {
 	l.zapLogger.Sugar().Fatalw(msg, keysAndValues...)
 }
 
-// L method output with specified context value.
-func L(ctx context.Context) *zapLogger {
-	return std.L(ctx)
+//AddContextKey 添加一个上下文key
+func AddContextKey(key string) {
+	mu.Lock()
+	defer mu.Unlock()
+	ContextKeysMap[key] = struct{}{}
 }
+
+//DelContextKey 删除一个上下文key
+func DelContextKey(key string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := ContextKeysMap[key]; !ok {
+		return
+	}
+	delete(ContextKeysMap, key)
+}
+
+// L 带有上下文的输出
+func L(ctx context.Context) *zapLogger { return std.L(ctx) }
 
 func (l *zapLogger) L(ctx context.Context) *zapLogger {
 	lg := l.clone()
 
-	if requestID := ctx.Value(KeyRequestID); requestID != nil {
-		lg.zapLogger = lg.zapLogger.With(zap.Any(KeyRequestID, requestID))
-	}
-	if username := ctx.Value(KeyUsername); username != nil {
-		lg.zapLogger = lg.zapLogger.With(zap.Any(KeyUsername, username))
-	}
-	if watcherName := ctx.Value(KeyWatcherName); watcherName != nil {
-		lg.zapLogger = lg.zapLogger.With(zap.Any(KeyWatcherName, watcherName))
+	for key, _ := range ContextKeysMap {
+		if value := ctx.Value(key); value != nil {
+			lg.zapLogger = lg.zapLogger.With(zap.Any(key, value))
+		}
 	}
 
 	return lg
 }
 
-//nolint:predeclared
+//go:noinline
 func (l *zapLogger) clone() *zapLogger {
-	copy := *l
-
-	return &copy
+	copyPtr := *l
+	return &copyPtr
 }
