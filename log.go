@@ -189,10 +189,11 @@ func New(opts *Options) *zapLogger {
 		NameKey:        "logger",
 		CallerKey:      "caller",
 		StacktraceKey:  "stacktrace",
+		FunctionKey:    zapcore.OmitKey,
 		LineEnding:     zapcore.DefaultLineEnding,
 		EncodeLevel:    encodeLevel,
 		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: milliSecondsDurationEncoder,
+		EncodeDuration: zapcore.SecondsDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 		EncodeName:     zapcore.FullNameEncoder,
 	}
