@@ -3,14 +3,12 @@ package clog
 import (
 	"context"
 	"fmt"
-	"log"
-	"strings"
-	"sync"
-	"time"
-
 	"github.com/natefinch/lumberjack"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"log"
+	"strings"
+	"sync"
 )
 
 // InfoLogger 是一个只能打印Info信息的Logger接口
@@ -147,8 +145,9 @@ func handleFields(l *zap.Logger, args []interface{}, additional ...zap.Field) []
 }
 
 var (
-	std = New(NewOptions())
-	mu  sync.Mutex
+	std              = New(NewOptions())
+	mu               sync.Mutex
+	lumberJackLogger = NewOptions().GetLumberJackLogger()
 
 	ContextKeysMap = map[string]struct{}{
 		KeyRequestID:   {},
@@ -180,14 +179,7 @@ func New(opts *Options) *zapLogger {
 		strings.Trim(opts.Name, "/")
 	}
 
-	lumberJackLogger := &lumberjack.Logger{
-		Filename:   opts.OutputPath + "/" + opts.Name + "-" + time.Now().Format(TimeFormat) + ".log",
-		MaxSize:    1000,
-		MaxBackups: 5,
-		MaxAge:     30,
-		Compress:   false,
-		LocalTime:  true,
-	}
+	lumberJackLogger = opts.GetLumberJackLogger()
 	writeSyncer := zapcore.AddSync(lumberJackLogger)
 
 	encoderConfig := zapcore.EncoderConfig{
@@ -224,6 +216,11 @@ func New(opts *Options) *zapLogger {
 	zap.ReplaceGlobals(l)
 
 	return logger
+}
+
+// LumberJackLogger 返回全局的lumberJackLogger
+func LumberJackLogger() *lumberjack.Logger {
+	return lumberJackLogger
 }
 
 // SugaredLogger 返回全局的SugaredLogger

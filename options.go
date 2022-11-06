@@ -61,6 +61,10 @@ func (o *Options) String() string {
 	return string(data)
 }
 
+func (o *Options) fileName() string {
+	return o.OutputPath + "/" + o.Name + "-" + time.Now().Format(TimeFormat) + ".log"
+}
+
 // Build 从配置和选项中构造一个全局的zap记录器
 func (o *Options) Build() error {
 	encodeLevel := zapcore.CapitalLevelEncoder
@@ -71,16 +75,7 @@ func (o *Options) Build() error {
 		strings.Trim(o.Name, "/")
 	}
 
-	lumberJackLogger := &lumberjack.Logger{
-		Filename:   o.OutputPath + "/" + o.Name + "-" + time.Now().Format(TimeFormat) + ".log",
-		MaxSize:    1000,
-		MaxBackups: 5,
-		MaxAge:     30,
-		Compress:   false,
-		LocalTime:  true,
-	}
-	writeSyncer := zapcore.AddSync(lumberJackLogger)
-
+	writeSyncer := zapcore.AddSync(o.GetLumberJackLogger())
 	encoderConfig := zapcore.EncoderConfig{
 		MessageKey:     "message",
 		LevelKey:       "level",
@@ -108,4 +103,15 @@ func (o *Options) Build() error {
 	zap.ReplaceGlobals(logger)
 
 	return nil
+}
+
+func (o *Options) GetLumberJackLogger() *lumberjack.Logger {
+	return &lumberjack.Logger{
+		Filename:   o.fileName(),
+		MaxSize:    1000,
+		MaxBackups: 5,
+		MaxAge:     30,
+		Compress:   false,
+		LocalTime:  true,
+	}
 }
