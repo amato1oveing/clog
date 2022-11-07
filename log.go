@@ -9,6 +9,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 // InfoLogger 是一个只能打印Info信息的Logger接口
@@ -93,6 +94,9 @@ func (l *infoLogger) Infow(msg string, keysAndValues ...interface{}) {
 type zapLogger struct {
 	zapLogger *zap.Logger
 	infoLogger
+	opts             *Options
+	lumberJackLogger *lumberjack.Logger
+	day              int
 }
 
 //handleFields 将一些key/value形式的错误信息转化为zap中的Field格式
@@ -145,9 +149,8 @@ func handleFields(l *zap.Logger, args []interface{}, additional ...zap.Field) []
 }
 
 var (
-	std              = New(NewOptions())
-	mu               sync.Mutex
-	lumberJackLogger = NewOptions().GetLumberJackLogger()
+	std = New(NewOptions())
+	mu  sync.Mutex
 
 	ContextKeysMap = map[string]struct{}{
 		KeyRequestID:   {},
@@ -179,7 +182,7 @@ func New(opts *Options) *zapLogger {
 		strings.Trim(opts.Name, "/")
 	}
 
-	lumberJackLogger = opts.GetLumberJackLogger()
+	lumberJackLogger := opts.GetLumberJackLogger()
 	writeSyncer := zapcore.AddSync(lumberJackLogger)
 
 	encoderConfig := zapcore.EncoderConfig{
@@ -212,6 +215,9 @@ func New(opts *Options) *zapLogger {
 			log:   l,
 			level: zap.InfoLevel,
 		},
+		opts:             opts,
+		lumberJackLogger: lumberJackLogger,
+		day:              time.Now().Day(),
 	}
 	zap.RedirectStdLog(l)
 	zap.ReplaceGlobals(l)
@@ -220,9 +226,7 @@ func New(opts *Options) *zapLogger {
 }
 
 // LumberJackLogger 返回全局的lumberJackLogger
-func LumberJackLogger() *lumberjack.Logger {
-	return lumberJackLogger
-}
+func LumberJackLogger() *lumberjack.Logger { return std.lumberJackLogger }
 
 // SugaredLogger 返回全局的SugaredLogger
 func SugaredLogger() *zap.SugaredLogger { return std.zapLogger.Sugar() }
@@ -258,7 +262,7 @@ func WithValues(keysAndValues ...interface{}) Logger { return std.WithValues(key
 func (l *zapLogger) WithValues(keysAndValues ...interface{}) Logger {
 	newLogger := l.zapLogger.With(handleFields(l.zapLogger, keysAndValues)...)
 
-	return NewLogger(newLogger)
+	return NewLogger(newLogger, l.lumberJackLogger, l.opts)
 }
 
 // WithName 为日志记录器的名称添加一个新元素
@@ -272,7 +276,7 @@ func WithName(s string) Logger { return std.WithName(s) }
 func (l *zapLogger) WithName(name string) Logger {
 	newLogger := l.zapLogger.Named(name)
 
-	return NewLogger(newLogger)
+	return NewLogger(newLogger, l.lumberJackLogger, l.opts)
 }
 
 // Flush 调用底层核心的Sync方法，刷新所有缓冲
@@ -286,13 +290,16 @@ func (l *zapLogger) Flush() {
 }
 
 // NewLogger 创建一个新的Logger
-func NewLogger(l *zap.Logger) Logger {
+func NewLogger(l *zap.Logger, logger *lumberjack.Logger, opts *Options) Logger {
 	return &zapLogger{
 		zapLogger: l,
 		infoLogger: infoLogger{
 			log:   l,
 			level: zap.InfoLevel,
 		},
+		day:              time.Now().Day(),
+		lumberJackLogger: logger,
+		opts:             opts,
 	}
 }
 
@@ -303,28 +310,34 @@ func ZapLogger() *zap.Logger {
 
 // Debug 输出Debug等级日志
 func Debug(msg string, fields ...Field) {
+	std.checkDay()
 	std.zapLogger.Debug(msg, fields...)
 }
 
 func (l *zapLogger) Debug(msg string, fields ...Field) {
+	l.checkDay()
 	l.zapLogger.Debug(msg, fields...)
 }
 
 // Debugf 输出Debug等级日志，使用fmt.Sprintf格式化
 func Debugf(format string, v ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Debugf(format, v...)
 }
 
 func (l *zapLogger) Debugf(format string, v ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Debugf(format, v...)
 }
 
 // Debugw 输出Debug等级日志，并携带key/value形式的值
 func Debugw(msg string, keysAndValues ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Debugw(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Debugw(msg string, keysAndValues ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Debugw(msg, keysAndValues...)
 }
 
@@ -334,132 +347,161 @@ func Info(msg string, fields ...Field) {
 }
 
 func (l *zapLogger) Info(msg string, fields ...Field) {
+	l.checkDay()
 	l.zapLogger.Info(msg, fields...)
 }
 
 // Infof 输出Info等级日志，使用fmt.Sprintf格式化
 func Infof(format string, v ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Infof(format, v...)
 }
 
 func (l *zapLogger) Infof(format string, v ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Infof(format, v...)
 }
 
 // Infow 输出Info等级日志，并携带key/value形式的值
 func Infow(msg string, keysAndValues ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Infow(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Infow(msg string, keysAndValues ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Infow(msg, keysAndValues...)
 }
 
 // Warn 输出Warn等级日志
 func Warn(msg string, fields ...Field) {
+	std.checkDay()
 	std.zapLogger.Warn(msg, fields...)
 }
 
 func (l *zapLogger) Warn(msg string, fields ...Field) {
+	l.checkDay()
 	l.zapLogger.Warn(msg, fields...)
 }
 
 // Warnf 输出Debug等级日志，使用fmt.Sprintf格式化
 func Warnf(format string, v ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Warnf(format, v...)
 }
 
 func (l *zapLogger) Warnf(format string, v ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Warnf(format, v...)
 }
 
 // Warnw 输出Warn等级日志，并携带key/value形式的值
 func Warnw(msg string, keysAndValues ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Warnw(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Warnw(msg string, keysAndValues ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Warnw(msg, keysAndValues...)
 }
 
 // Error 输出Error等级日志
 func Error(msg string, fields ...Field) {
+	std.checkDay()
 	std.zapLogger.Error(msg, fields...)
 }
 
 func (l *zapLogger) Error(msg string, fields ...Field) {
+	l.checkDay()
 	l.zapLogger.Error(msg, fields...)
 }
 
 // Errorf 输出Error等级日志，使用fmt.Sprintf格式化
 func Errorf(format string, v ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Errorf(format, v...)
 }
 
 func (l *zapLogger) Errorf(format string, v ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Errorf(format, v...)
 }
 
 // Errorw 输出Error等级日志，并携带key/value形式的值
 func Errorw(msg string, keysAndValues ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Errorw(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Errorw(msg string, keysAndValues ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Errorw(msg, keysAndValues...)
 }
 
 // Panic 输出Panic等级日志
 func Panic(msg string, fields ...Field) {
+	std.checkDay()
 	std.zapLogger.Panic(msg, fields...)
 }
 
 func (l *zapLogger) Panic(msg string, fields ...Field) {
+	l.checkDay()
 	l.zapLogger.Panic(msg, fields...)
 }
 
 // Panicf 输出Error等级日志，使用fmt.Sprintf格式化
 func Panicf(format string, v ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Panicf(format, v...)
 }
 
 func (l *zapLogger) Panicf(format string, v ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Panicf(format, v...)
 }
 
 // Panicw 输出Panic等级日志，并携带key/value形式的值
 func Panicw(msg string, keysAndValues ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Panicw(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Panicw(msg string, keysAndValues ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Panicw(msg, keysAndValues...)
 }
 
 // Fatal 输出Fatal等级日志
 func Fatal(msg string, fields ...Field) {
+	std.checkDay()
 	std.zapLogger.Fatal(msg, fields...)
 }
 
 func (l *zapLogger) Fatal(msg string, fields ...Field) {
+	l.checkDay()
 	l.zapLogger.Fatal(msg, fields...)
 }
 
 // Fatalf 输出Fatal等级日志，使用fmt.Sprintf格式化
 func Fatalf(format string, v ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Fatalf(format, v...)
 }
 
 func (l *zapLogger) Fatalf(format string, v ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Fatalf(format, v...)
 }
 
 // Fatalw 输出Fatal等级日志，并携带key/value形式的值
 func Fatalw(msg string, keysAndValues ...interface{}) {
+	std.checkDay()
 	std.zapLogger.Sugar().Fatalw(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Fatalw(msg string, keysAndValues ...interface{}) {
+	l.checkDay()
 	l.zapLogger.Sugar().Fatalw(msg, keysAndValues...)
 }
 
@@ -499,4 +541,24 @@ func (l *zapLogger) L(ctx context.Context) *zapLogger {
 func (l *zapLogger) clone() *zapLogger {
 	copyPtr := *l
 	return &copyPtr
+}
+
+// checkDay 判断是否是新的一天,如果是新的一天,则重新创建一个新的日志文件
+func (l *zapLogger) checkDay() {
+	now := time.Now()
+	if now.Day() != l.day {
+		l.day = now.Day()
+		l.rotate()
+	}
+}
+
+// rotate 重新创建一个新的日志文件
+func (l *zapLogger) rotate() {
+	mu.Lock()
+	defer mu.Unlock()
+	l.lumberJackLogger.Filename = l.opts.fileName()
+	err := l.lumberJackLogger.Rotate()
+	if err != nil {
+		Errorw("Rotate log file failed", "err", err)
+	}
 }
