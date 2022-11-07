@@ -116,3 +116,13 @@ func (o *Options) GetLumberJackLogger() *lumberjack.Logger {
 		LocalTime:  true,
 	}
 }
+
+// ToLevel 解析string转为Level类型，如果解析失败则返回InfoLevel
+func ToLevel(level string) Level {
+	var zapLevel zapcore.Level
+	err := zapLevel.UnmarshalText([]byte(level))
+	if err != nil {
+		return InfoLevel
+	}
+	return zapLevel
+}
