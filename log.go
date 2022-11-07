@@ -96,6 +96,7 @@ type zapLogger struct {
 	infoLogger
 	opts             *Options
 	lumberJackLogger *lumberjack.Logger
+	contextKeys      []string
 	day              int
 }
 
@@ -151,14 +152,6 @@ func handleFields(l *zap.Logger, args []interface{}, additional ...zap.Field) []
 var (
 	std = New(NewOptions())
 	mu  sync.Mutex
-
-	ContextKeysMap = map[string]struct{}{
-		KeyRequestID:   {},
-		KeyUsername:    {},
-		KeyUserId:      {},
-		KeyWatcherName: {},
-		KeyTraceId:     {},
-	}
 )
 
 // Init 使用Options初始化std
@@ -217,6 +210,7 @@ func New(opts *Options) *zapLogger {
 		},
 		opts:             opts,
 		lumberJackLogger: lumberJackLogger,
+		contextKeys:      make([]string, 0),
 		day:              time.Now().Day(),
 	}
 	zap.RedirectStdLog(l)
@@ -225,11 +219,29 @@ func New(opts *Options) *zapLogger {
 	return logger
 }
 
+// ZapLogger 返回全局的ZapLogger
+func ZapLogger() *zap.Logger { return std.zapLogger }
+
+//ZapLogger 返回ZapLogger
+func (l *zapLogger) ZapLogger() *zap.Logger { return l.zapLogger }
+
 // LumberJackLogger 返回全局的lumberJackLogger
 func LumberJackLogger() *lumberjack.Logger { return std.lumberJackLogger }
 
+// LumberJackLogger 返回lumberJackLogger
+func (l *zapLogger) LumberJackLogger() *lumberjack.Logger { return l.lumberJackLogger }
+
+// ContextKeys 返回全局的contextKeys
+func ContextKeys() []string { return std.contextKeys }
+
+// ContextKeys 返回contextKeys
+func (l *zapLogger) ContextKeys() []string { return l.contextKeys }
+
 // SugaredLogger 返回全局的SugaredLogger
 func SugaredLogger() *zap.SugaredLogger { return std.zapLogger.Sugar() }
+
+// SugaredLogger 返回SugaredLogger
+func (l *zapLogger) SugaredLogger() *zap.SugaredLogger { return l.zapLogger.Sugar() }
 
 // StdErrLogger 返回标准库Logger，错误级别为error
 func StdErrLogger() *log.Logger {
@@ -297,15 +309,11 @@ func NewLogger(l *zap.Logger, logger *lumberjack.Logger, opts *Options) Logger {
 			log:   l,
 			level: zap.InfoLevel,
 		},
-		day:              time.Now().Day(),
-		lumberJackLogger: logger,
 		opts:             opts,
+		lumberJackLogger: logger,
+		contextKeys:      make([]string, 0),
+		day:              time.Now().Day(),
 	}
-}
-
-// ZapLogger 返回ZapLogger
-func ZapLogger() *zap.Logger {
-	return std.zapLogger
 }
 
 // Debug 输出Debug等级日志
@@ -505,21 +513,29 @@ func (l *zapLogger) Fatalw(msg string, keysAndValues ...interface{}) {
 	l.zapLogger.Sugar().Fatalw(msg, keysAndValues...)
 }
 
-//AddContextKey 添加一个上下文key
-func AddContextKey(key string) {
-	mu.Lock()
-	defer mu.Unlock()
-	ContextKeysMap[key] = struct{}{}
+//AddContextKeys 添加多个上下文key
+func AddContextKeys(keys ...string) {
+	std.AddContextKeys(keys...)
+}
+
+// AddContextKeys 添加多个上下文key
+func (l *zapLogger) AddContextKeys(keys ...string) {
+	l.contextKeys = append(l.contextKeys, keys...)
 }
 
 //DelContextKey 删除一个上下文key
 func DelContextKey(key string) {
-	mu.Lock()
-	defer mu.Unlock()
-	if _, ok := ContextKeysMap[key]; !ok {
-		return
+	std.DelContextKey(key)
+}
+
+// DelContextKey 删除一个上下文key
+func (l *zapLogger) DelContextKey(key string) {
+	for i, k := range l.contextKeys {
+		if k == key {
+			l.contextKeys = append(l.contextKeys[:i], l.contextKeys[i+1:]...)
+			break
+		}
 	}
-	delete(ContextKeysMap, key)
 }
 
 // L 带有上下文的输出
@@ -528,7 +544,7 @@ func L(ctx context.Context) *zapLogger { return std.L(ctx) }
 func (l *zapLogger) L(ctx context.Context) *zapLogger {
 	lg := l.clone()
 
-	for key, _ := range ContextKeysMap {
+	for _, key := range l.contextKeys {
 		if value := ctx.Value(key); value != nil {
 			lg.zapLogger = lg.zapLogger.With(zap.Any(key, value))
 		}
